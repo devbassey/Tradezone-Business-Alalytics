@@ -48,6 +48,101 @@ WHERE
 	unit_price IS NULL;
 
 
+-- ─────────────────────────────────────────────
+-- FLAG MISSING VALUES — Add flag columns
+-- ─────────────────────────────────────────────
+
+-- 1. FLAG customers with missing email
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS flag_missing_email BOOLEAN DEFAULT FALSE;
+
+UPDATE customers
+SET flag_missing_email = TRUE
+WHERE email IS NULL OR TRIM(email) = '';
+
+-- 2. FLAG customers with missing signup_date
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS flag_missing_signup BOOLEAN DEFAULT FALSE;
+
+UPDATE customers
+SET flag_missing_signup = TRUE
+WHERE signup_date IS NULL;
+
+-- 3. FLAG orders with NULL total_amount
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS flag_missing_total BOOLEAN DEFAULT FALSE;
+
+UPDATE orders
+SET flag_missing_total = TRUE
+WHERE total_amount IS NULL;
+
+-- 4. FLAG orders with NULL delivery_date (affects Q3 fulfilment calculation)
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS flag_missing_delivery BOOLEAN DEFAULT FALSE;
+
+UPDATE orders
+SET flag_missing_delivery = TRUE
+WHERE delivery_date IS NULL;
+
+-- 5. FLAG products with NULL unit_price (cannot be used in revenue queries)
+ALTER TABLE products ADD COLUMN IF NOT EXISTS flag_missing_price BOOLEAN DEFAULT FALSE;
+
+UPDATE products
+SET flag_missing_price = TRUE
+WHERE unit_price IS NULL;
+
+-- ── Verify your flags ──────────────────────────────────────────
+SELECT 'customers - missing email'    AS issue, COUNT(*) FROM customers WHERE flag_missing_email   = TRUE
+UNION ALL
+SELECT 'customers - missing signup',           COUNT(*) FROM customers WHERE flag_missing_signup  = TRUE
+UNION ALL
+SELECT 'orders - missing total',               COUNT(*) FROM orders    WHERE flag_missing_total   = TRUE
+UNION ALL
+SELECT 'orders - missing delivery date',       COUNT(*) FROM orders    WHERE flag_missing_delivery = TRUE
+UNION ALL
+SELECT 'products - missing price',             COUNT(*) FROM products  WHERE flag_missing_price   = TRUE;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

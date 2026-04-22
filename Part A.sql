@@ -412,3 +412,8 @@ select
 from 
 	payments; --> No change needed for payments.payment_date as it is TIMESTAMP that stores both date and time
 
+
+-- SECTION 3: NORMALISE PRODUCT CATEGORY NAMES TO TITLE CASE
+-- ─────────────────────────────────────────────
+
+

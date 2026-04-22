@@ -87,7 +87,7 @@ UPDATE products
 SET flag_missing_price = TRUE
 WHERE unit_price IS NULL;
 
--- ── Verify your flags ──────────────────────────────────────────
+-- ── flag Verification ──────────────────────────────────────────
 SELECT 'customers - missing email'    AS issue, COUNT(*) FROM customers WHERE flag_missing_email   = TRUE
 UNION ALL
 SELECT 'customers - missing signup',           COUNT(*) FROM customers WHERE flag_missing_signup  = TRUE
@@ -100,84 +100,14 @@ SELECT 'products - missing price',             COUNT(*) FROM products  WHERE fla
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
--- Fix inconsistent city names in the customers table
-
-UPDATE customers
-SET city = TRIM(INITCAP(REPLACE(REPLACE(city, '-', ' '), 'Port Harcourt', 'Port Harcourt')));
-
--- Fix known variants manually
-UPDATE customers SET city = 'Port Harcourt'
-WHERE LOWER(TRIM(city)) IN ('port-harcourt', 'portharcourt');
-
-UPDATE sellers
-SET city = TRIM(INITCAP(REPLACE(city, '-', ' ')));
-
-UPDATE sellers SET city = 'Port Harcourt'
-WHERE LOWER(TRIM(city)) IN ('port-harcourt', 'portharcourt');
-
-
-
--- Normalise category names to Title Case
-UPDATE products
-SET category = INITCAP(LOWER(TRIM(category)));
-
-UPDATE sellers
-SET product_category = INITCAP(LOWER(TRIM(product_category)));
-
+----QUESTION 2; Removing Duplicate Records
+-- A: fist, we identify the duplicate rows in customers, sellers and orders.
 
 -- Remove duplicate customers (same customer_id)
 DELETE FROM customers
 WHERE ctid NOT IN (
   SELECT MIN(ctid) FROM customers GROUP BY customer_id
 );
-
-
 
 -- Remove duplicate sellers
 DELETE FROM sellers
@@ -189,53 +119,3 @@ WHERE ctid NOT IN (
 DELETE FROM orders
 WHERE ctid NOT IN (
   SELECT MIN(ctid) FROM orders GROUP BY order_id
-);
-
-
-
-
-
-
-
-
-
-
--- Flag orders where total_amount differs from sum of line items by more than ₦10
-SELECT
-    o.order_id,
-    o.total_amount           AS recorded_total,
-    SUM(oi.line_total)       AS calculated_total,
-    ABS(o.total_amount - SUM(oi.line_total)) AS difference
-FROM orders o
-JOIN order_items oi ON o.order_id = oi.order_id
-GROUP BY o.order_id, o.total_amount
-HAVING ABS(o.total_amount - SUM(oi.line_total)) > 10
-ORDER BY difference DESC;
-
--- Note the count of flagged orders. Do NOT delete — flag for finance team.
-
-
-
--- Check for out-of-range ratings
-SELECT review_id, rating FROM reviews
-WHERE rating < 1 OR rating > 5;
-
--- Rating of 0 found in dataset — this is invalid
--- Decision: set 0-rated reviews to NULL (unrated) rather than deleting
--- Deleting would lose order linkage data
-UPDATE reviews SET rating = NULL WHERE rating = 0;
-
-
-
--- Check for negative unit prices
-SELECT product_id, product_name, unit_price
-FROM products
-WHERE unit_price < 0;
-
--- Check for negative line totals in order_items
-SELECT item_id, order_id, unit_price, quantity, line_total
-FROM order_items
-WHERE unit_price < 0 OR line_total < 0;
-
-
-

@@ -103,19 +103,109 @@ SELECT 'products - missing price',             COUNT(*) FROM products  WHERE fla
 ----QUESTION 2; Removing Duplicate Records
 -- A: fist, we identify the duplicate rows in customers, sellers and orders.
 
--- Remove duplicate customers (same customer_id)
-DELETE FROM customers
-WHERE ctid NOT IN (
-  SELECT MIN(ctid) FROM customers GROUP BY customer_id
+-- ─────────────────────────────────────────────
+-- IDENTIFY DUPLICATE ROWS
+-- ─────────────────────────────────────────────
+
+-- ── 1. CUSTOMERS ──────────────────────────────
+-- Duplicates = same customer_id appearing more than once
+
+SELECT
+    customer_id,
+    COUNT(*)        AS duplicate_count
+FROM customers
+GROUP BY customer_id
+HAVING COUNT(*) > 1
+ORDER BY duplicate_count DESC;
+
+-- See the full duplicate rows side by side
+SELECT *
+FROM customers
+WHERE customer_id IN (
+    SELECT customer_id
+    FROM customers
+    GROUP BY customer_id
+    HAVING COUNT(*) > 1
+)
+ORDER BY customer_id;
+
+
+-- ── 2. SELLERS ────────────────────────────────
+-- Duplicates = same seller_id appearing more than once
+
+SELECT
+    seller_id,
+    COUNT(*)        AS duplicate_count
+FROM sellers
+GROUP BY seller_id
+HAVING COUNT(*) > 1
+ORDER BY duplicate_count DESC;
+
+-- See the full duplicate rows side by side
+SELECT *
+FROM sellers
+WHERE seller_id IN (
+    SELECT seller_id
+    FROM sellers
+    GROUP BY seller_id
+    HAVING COUNT(*) > 1
+)
+ORDER BY seller_id;
+
+
+-- ── 3. ORDERS ─────────────────────────────────
+-- Duplicates = same order_id appearing more than once
+
+SELECT
+    order_id,
+    COUNT(*)        AS duplicate_count
+FROM orders
+GROUP BY order_id
+HAVING COUNT(*) > 1
+ORDER BY duplicate_count DESC;
+
+-- See the full duplicate rows side by side
+SELECT *
+FROM orders
+WHERE order_id IN (
+    SELECT order_id
+    FROM orders
+    GROUP BY order_id
+    HAVING COUNT(*) > 1
+)
+ORDER BY order_id;
+
+
+-- ── 4. SUMMARY COUNT ACROSS ALL THREE TABLES ──
+-- Run this for a quick overview before deciding what to delete
+--- no duplicates was found
+SELECT 'customers' AS table_name,
+       COUNT(*)    AS total_duplicate_rows
+FROM customers
+WHERE customer_id IN (
+    SELECT customer_id FROM customers
+    GROUP BY customer_id HAVING COUNT(*) > 1
+)
+UNION ALL
+SELECT 'sellers',
+       COUNT(*)
+FROM sellers
+WHERE seller_id IN (
+    SELECT seller_id FROM sellers
+    GROUP BY seller_id HAVING COUNT(*) > 1
+)
+UNION ALL
+SELECT 'orders',
+       COUNT(*)
+FROM orders
+WHERE order_id IN (
+    SELECT order_id FROM orders
+    GROUP BY order_id HAVING COUNT(*) > 1
 );
 
--- Remove duplicate sellers
-DELETE FROM sellers
-WHERE ctid NOT IN (
-  SELECT MIN(ctid) FROM sellers GROUP BY seller_id
-);
 
--- Remove duplicate orders
-DELETE FROM orders
-WHERE ctid NOT IN (
-  SELECT MIN(ctid) FROM orders GROUP BY order_id
+
+
+
+
+

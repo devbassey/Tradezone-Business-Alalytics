@@ -108,26 +108,160 @@ SELECT 'products - missing price',             COUNT(*) FROM products  WHERE fla
 -- ─────────────────────────────────────────────
 
 -- ── 1. CUSTOMERS ──────────────────────────────
--- Duplicates = same customer_id appearing more than once
+-- Identify Duplicate Emails in Customers
 
+-- Step 1: See which emails appear more than once
+SELECT
+    email,
+    COUNT(*)        AS occurrence_count
+FROM customers
+WHERE email IS NOT NULL
+  AND TRIM(email) != ''
+GROUP BY email
+HAVING COUNT(*) > 1
+ORDER BY occurrence_count DESC;
+
+
+-- Step 2: See the full records behind those duplicate emails
+-- This shows you WHO shares an email so you can decide what to do
 SELECT
     customer_id,
-    COUNT(*)        AS duplicate_count
+    first_name,
+    last_name,
+    email,
+    city,
+    state,
+    signup_date,
+    account_status
 FROM customers
-GROUP BY customer_id
-HAVING COUNT(*) > 1
-ORDER BY duplicate_count DESC;
+WHERE email IN (
+    SELECT email
+    FROM customers
+    WHERE email IS NOT NULL
+    AND TRIM(email) != ''
+    GROUP BY email
+    HAVING COUNT(*) > 1
+)
+ORDER BY email, signup_date;
 
--- See the full duplicate rows side by side
-SELECT *
+
+-- Step 3: Flag them (do not delete yet)
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS flag_duplicate_email BOOLEAN DEFAULT FALSE;
+
+UPDATE customers
+SET flag_duplicate_email = TRUE
+WHERE email IN (
+    SELECT email
+    FROM customers
+    WHERE email IS NOT NULL
+    AND TRIM(email) != ''
+    GROUP BY email
+    HAVING COUNT(*) > 1
+);
+
+-- Step 4: Confirm how many rows were flagged
+SELECT COUNT(*) AS customers_with_duplicate_email
 FROM customers
-WHERE customer_id IN (
+WHERE flag_duplicate_email = TRUE; -->30 rows were flagged as duplicate rows
+
+
+-- ─────────────────────────────────────────────
+-- OPTION A: Keep the earliest account, flag the rest
+-- Use this if the duplicates look like the same person
+-- who registered twice
+-- ─────────────────────────────────────────────
+
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS flag_duplicate_keep BOOLEAN DEFAULT FALSE;
+
+-- Mark the OLDEST account per email as the one to keep
+UPDATE customers
+SET flag_duplicate_keep = TRUE
+WHERE ctid IN (
+    SELECT DISTINCT ON (email) ctid
+    FROM customers
+    WHERE email IS NOT NULL
+      AND TRIM(email) != ''
+    ORDER BY email, signup_date ASC  -- earliest signup = keeper
+);
+
+-- Preview what will be kept vs removed
+SELECT
+    customer_id,
+    first_name,
+    last_name,
+    email,
+    signup_date,
+    CASE WHEN flag_duplicate_keep = TRUE THEN 'KEEP' ELSE 'REMOVE' END AS decision
+FROM customers
+WHERE flag_duplicate_email = TRUE
+ORDER BY email, signup_date;
+
+
+-- ─────────────────────────────────────────────
+-- STEP 1: SEE WHICH DUPLICATE CUSTOMERS
+--         ARE STILL REFERENCED IN ORDERS
+-- ─────────────────────────────────────────────
+
+SELECT
+    c.customer_id,
+    COUNT(*) OVER (PARTITION BY c.customer_id)  AS copies_in_customers,
+    o.order_id,
+    c.ctid
+FROM customers c
+LEFT JOIN orders o ON c.customer_id = o.customer_id
+WHERE c.customer_id IN (
     SELECT customer_id
     FROM customers
     GROUP BY customer_id
     HAVING COUNT(*) > 1
 )
-ORDER BY customer_id;
+ORDER BY c.customer_id, c.ctid;
+
+
+
+-- STEP A: Delete duplicates that have NO orders
+
+DELETE FROM customers
+WHERE ctid NOT IN (
+    SELECT MIN(ctid)
+    FROM customers
+    GROUP BY customer_id
+)
+AND customer_id NOT IN (
+    SELECT DISTINCT customer_id FROM orders
+);
+
+-- STEP B: For duplicates that DO have orders,
+--         keep the MIN ctid copy, delete the rest
+--         PostgreSQL allows this because we are keeping
+--         the row that the orders point to
+
+DELETE FROM customers
+WHERE ctid NOT IN (
+    SELECT MIN(ctid)
+    FROM customers
+    GROUP BY customer_id
+)
+AND customer_id IN (
+    SELECT DISTINCT customer_id FROM orders
+);
+
+
+-- STEP 3: CONFIRM IT WORKED
+-- ─────────────────────────────────────────────
+
+SELECT customer_id, COUNT(*) AS copies
+FROM customers
+GROUP BY customer_id
+HAVING COUNT(*) > 1; -- If this returns zero rows, you are clean.
+
+-- Delete Duplicate Rows from customers
+DELETE FROM customers
+WHERE ctid NOT IN (
+    SELECT MIN(ctid)
+    FROM customers
+    GROUP BY customer_id
+);
 
 
 -- ── 2. SELLERS ────────────────────────────────
@@ -204,8 +338,77 @@ WHERE order_id IN (
 );
 
 
+-- QUESTION 3: STANDARDISE CITY NAMES
+-- ─────────────────────────────────────────────
+
+-- First, see all the messy variations currently in the data
+SELECT DISTINCT city FROM customers ORDER BY city;
+SELECT DISTINCT city FROM sellers   ORDER BY city;
+
+-- Fix customers city names
+-- TRIM removes leading/trailing spaces
+-- INITCAP makes First Letter Uppercase, rest lowercase
+UPDATE customers
+SET city = INITCAP(TRIM(city));
+
+-- Fix the Port Harcourt and Lago S variations specifically
+-- (Port-Harcourt, PortHarcourt, port harcourt all become Port Harcourt)
+--> Customers Table
+UPDATE customers
+SET city = 'Port Harcourt'
+WHERE LOWER(TRIM(city)) IN (
+    'port-harcourt',
+    'portharcourt',
+    'port  harcourt'   --> double space variant
+);
+
+-- (Fix Lago S to Lagos)
+UPDATE customers 
+SET city = 'Lagos' 
+WHERE TRIM(city) ILIKE 'Lago %s';
+
+--> Sellers Table
+UPDATE sellers
+SET city = INITCAP(TRIM(city));
+
+UPDATE sellers
+SET city = 'Port Harcourt'
+WHERE LOWER(TRIM(city)) IN (
+    'port-harcourt',
+    'portharcourt',
+    'port  harcourt'   --> double space variant
+);
+
+-- (Fix Lago S to Lagos)
+UPDATE sellers 
+SET city = 'Lagos' 
+WHERE TRIM(city) ILIKE 'Lago %s';
+
+-- Verify — all cities in customers and sellers table now clean
+SELECT DISTINCT city FROM customers ORDER BY city;
+SELECT DISTINCT city FROM sellers   ORDER BY city;
 
 
 
+-- SECTION 2: STANDARDISE DATE COLUMNS
+-- ─────────────────────────────────────────────
 
+-- PostgreSQL stores DATE columns as YYYY-MM-DD internally already.
+-- The issue is when dates were loaded as VARCHAR/TEXT instead of DATE.
+-- Run this check first to see what data types your columns actually are:
+
+SELECT
+    column_name,
+    data_type,
+    table_name
+FROM information_schema.columns
+WHERE table_name IN ('customers', 'sellers', 'orders', 'payments', 'reviews')
+  AND column_name LIKE '%date%'
+ORDER BY table_name, column_name; --> Note: All date columns confirmed as DATE type. Format is YYYY-MM-DD by default.
+
+
+select 
+	payment_date 
+from 
+	payments; --> No change needed for payments.payment_date as it is TIMESTAMP that stores both date and time
 

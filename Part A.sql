@@ -478,3 +478,250 @@ UNION ALL
 SELECT 'Seller categories cleaned',
        COUNT(DISTINCT product_category)
 FROM sellers;
+
+
+
+-- QUESTION 4: DATA VALIDATION
+-- ═════════════════════════════════════════════════════
+-- VALIDATION 1: ORDER TOTAL vs LINE ITEMS
+-- Verify orders.total_amount matches
+-- the sum of order_items.line_total
+-- Flag where difference is greater than ₦10
+
+-- STEP 1A: See the mismatch summary first
+SELECT
+    COUNT(*)                        AS total_orders_checked,
+    SUM(CASE WHEN ABS(o.total_amount - oi.calculated_total) > 10
+             THEN 1 ELSE 0 END)     AS orders_with_mismatch,
+    SUM(CASE WHEN ABS(o.total_amount - oi.calculated_total) <= 10
+             THEN 1 ELSE 0 END)     AS orders_matching
+FROM orders o
+JOIN (
+    SELECT order_id, SUM(line_total) AS calculated_total
+    FROM order_items
+    GROUP BY order_id
+) oi ON o.order_id = oi.order_id
+WHERE o.total_amount IS NOT NULL; --> Orders checked = 2865. Orders matching = 2741. Orders with a mismatch = 124
+
+-- STEP 1B: See every flagged order in detail
+SELECT
+    o.order_id,
+    o.customer_id,
+    o.seller_id,
+    o.order_date,
+    o.total_amount                              AS recorded_total,
+    oi.calculated_total,
+    ROUND(o.total_amount - oi.calculated_total, 2) AS difference,
+    CASE
+        WHEN o.total_amount > oi.calculated_total THEN 'Overcharged'
+        WHEN o.total_amount < oi.calculated_total THEN 'Undercharged'
+    END                                         AS mismatch_type
+FROM orders o
+JOIN (
+    SELECT order_id, SUM(line_total) AS calculated_total
+    FROM order_items
+    GROUP BY order_id
+) oi ON o.order_id = oi.order_id
+WHERE ABS(o.total_amount - oi.calculated_total) > 10
+ORDER BY ABS(o.total_amount - oi.calculated_total) DESC;
+
+
+-- STEP 1C: Add a flag column and stamp the affected rows
+ALTER TABLE orders
+ADD COLUMN IF NOT EXISTS flag_amount_mismatch BOOLEAN DEFAULT FALSE;
+
+ALTER TABLE orders
+ADD COLUMN IF NOT EXISTS amount_difference NUMERIC(14,2) DEFAULT 0;
+
+UPDATE orders o
+SET
+    flag_amount_mismatch = TRUE,
+    amount_difference    = ROUND(o.total_amount - oi.calculated_total, 2)
+FROM (
+    SELECT order_id, SUM(line_total) AS calculated_total
+    FROM order_items
+    GROUP BY order_id
+) oi
+WHERE o.order_id = oi.order_id
+  AND ABS(o.total_amount - oi.calculated_total) > 10;
+
+
+-- STEP 1D: Verify the flags were applied
+SELECT
+    flag_amount_mismatch,
+    COUNT(*)                        AS order_count,
+    ROUND(AVG(amount_difference),2) AS avg_difference,
+    ROUND(MAX(amount_difference),2) AS max_difference,
+    ROUND(MIN(amount_difference),2) AS min_difference
+FROM orders
+GROUP BY flag_amount_mismatch;
+
+
+-- VALIDATION 2: REVIEW RATINGS
+-- All ratings must be between 1 and 5
+-- ─────────────────────────────────────────────
+
+-- STEP 2A: See the full distribution of ratings first
+SELECT
+    rating,
+    COUNT(*) AS count
+FROM reviews
+GROUP BY rating
+ORDER BY rating;
+
+-- STEP 2B: Isolate the invalid ones
+SELECT
+    review_id,
+    product_id,
+    customer_id,
+    order_id,
+    rating,
+    review_date,
+    CASE
+        WHEN rating IS NULL THEN 'Missing rating'
+        WHEN rating = 0     THEN 'Zero — invalid scale'
+        WHEN rating < 1     THEN 'Below minimum'
+        WHEN rating > 5     THEN 'Above maximum'
+    END                         AS reason
+FROM reviews
+WHERE rating IS NULL
+   OR rating < 1
+   OR rating > 5
+ORDER BY rating;
+
+-- STEP 2C: Add a flag column for invalid ratings
+ALTER TABLE reviews
+ADD COLUMN IF NOT EXISTS flag_invalid_rating BOOLEAN DEFAULT FALSE;
+
+UPDATE reviews
+SET flag_invalid_rating = TRUE
+WHERE rating IS NULL
+   OR rating < 1
+   OR rating > 5;
+
+-- STEP 2D: Set invalid ratings to NULL
+-- Decision: We set them to NULL rather than deleting the row.
+-- Deleting would lose the order linkage and purchase history.
+-- NULL means "unrated" which is honest — we do not know the
+-- true rating, so we should not guess or keep a false value.
+UPDATE reviews
+SET rating = NULL
+WHERE flag_invalid_rating = TRUE;
+
+-- STEP 2E: Confirm only valid ratings remain
+SELECT
+    MIN(rating)  AS lowest_rating,
+    MAX(rating)  AS highest_rating,
+    COUNT(*)     AS total_reviews,
+    SUM(CASE WHEN rating IS NULL THEN 1 ELSE 0 END) AS nulled_out
+FROM reviews;
+
+
+-- VALIDATION 3: PRODUCT PRICES & DISCOUNTS
+-- No negative unit prices
+-- No discount percentages above 100%
+-- ─────────────────────────────────────────────
+
+-- STEP 3A: Check for negative unit prices in products table
+SELECT
+    product_id,
+    product_name,
+    category,
+    unit_price
+FROM products
+WHERE unit_price < 0
+   OR unit_price IS NULL
+ORDER BY unit_price;
+
+
+-- STEP 3B: Check for negative unit prices in order_items
+-- (a line item price could differ from the product master price
+--  due to promotions — check both tables separately)
+SELECT
+    oi.item_id,
+    oi.order_id,
+    oi.product_id,
+    oi.quantity,
+    oi.unit_price   AS line_item_price,
+    oi.line_total
+FROM order_items oi
+WHERE oi.unit_price < 0
+   OR oi.line_total < 0
+ORDER BY oi.unit_price;
+
+
+-- STEP 3C: Check for discount percentages above 100%
+-- The products table does not have a discount column,
+-- but we can detect implied discounts by comparing
+-- order_items.unit_price to products.unit_price
+SELECT *
+FROM (
+    SELECT
+        oi.item_id,
+        oi.order_id,
+        oi.product_id,
+        p.unit_price                                AS master_price,
+        oi.unit_price                               AS charged_price,
+        ROUND(
+            100.0 * (p.unit_price - oi.unit_price)
+            / NULLIF(p.unit_price, 0)
+        , 1)                                        AS implied_discount_pct
+    FROM order_items oi
+    JOIN products p ON oi.product_id = p.product_id
+    WHERE p.unit_price > 0
+      AND oi.unit_price < p.unit_price
+) AS discount_calc
+WHERE implied_discount_pct > 100
+ORDER BY implied_discount_pct DESC;
+
+-- STEP 3D: Flag negative prices in products
+ALTER TABLE products
+ADD COLUMN IF NOT EXISTS flag_invalid_price BOOLEAN DEFAULT FALSE;
+
+UPDATE products
+SET flag_invalid_price = TRUE
+WHERE unit_price < 0
+   OR unit_price IS NULL;
+
+-- STEP 3E: Flag negative prices in order_items
+ALTER TABLE order_items
+ADD COLUMN IF NOT EXISTS flag_invalid_line BOOLEAN DEFAULT FALSE;
+
+UPDATE order_items
+SET flag_invalid_line = TRUE
+WHERE unit_price < 0
+   OR line_total < 0;
+
+
+-- FINAL SUMMARY — all validation flags at once
+-- ─────────────────────────────────────────────
+
+SELECT
+    'Orders — amount mismatch'      AS validation_check,
+    COUNT(*)                        AS flagged_rows
+FROM orders
+WHERE flag_amount_mismatch = TRUE
+
+UNION ALL
+
+SELECT
+    'Reviews — invalid rating',
+    COUNT(*)
+FROM reviews
+WHERE flag_invalid_rating = TRUE
+
+UNION ALL
+
+SELECT
+    'Products — invalid price',
+    COUNT(*)
+FROM products
+WHERE flag_invalid_price = TRUE
+
+UNION ALL
+
+SELECT
+    'Order items — invalid line price',
+    COUNT(*)
+FROM order_items
+WHERE flag_invalid_line = TRUE;

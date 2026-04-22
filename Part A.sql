@@ -413,7 +413,68 @@ from
 	payments; --> No change needed for payments.payment_date as it is TIMESTAMP that stores both date and time
 
 
+
 -- SECTION 3: NORMALISE PRODUCT CATEGORY NAMES TO TITLE CASE
 -- ─────────────────────────────────────────────
+-- First, I did a quick glance to see all the raw category variations in both products and sellers tables
+SELECT DISTINCT category FROM products ORDER BY category;
+SELECT DISTINCT product_category FROM sellers ORDER BY product_category;
 
+-- Fix products table
+-- LOWER first ensures ELECTRONICS and electronics both become Electronics
+UPDATE products
+SET category = INITCAP(LOWER(TRIM(category)));
 
+-- Standardizing product categories to their full, correct names
+UPDATE products
+SET category = CASE 
+    WHEN category = 'Beauty' THEN 'Beauty & Personal Care'
+    WHEN category = 'Books' THEN 'Books & Stationery'
+    WHEN category = 'Electronis' THEN 'Electronics'
+    WHEN category = 'Fashon' THEN 'Fashion'
+    WHEN category IN ('Food', 'Food And Beverages') THEN 'Food & Beverages'
+    WHEN category = 'Home And Garden' THEN 'Home & Garden'
+    WHEN category IN ('Sports', 'Sports And Fitness') THEN 'Sports & Fitness'
+    ELSE category -- If it's already correct or doesn't match, keep it as is
+END
+WHERE category IN (
+    'Beauty', 'Books', 'Electronis', 'Fashon', 'Food', 
+    'Food And Beverages', 'Home And Garden', 'Sports', 'Sports And Fitness'
+);
+
+-- Fix sellers table
+UPDATE sellers
+SET product_category = INITCAP(LOWER(TRIM(product_category)));
+
+-- Standardizing product categories to their full, correct names
+UPDATE sellers
+SET product_category = CASE 
+    WHEN product_category = 'Beauty' THEN 'Beauty & Personal Care'
+    WHEN product_category = 'Books' THEN 'Books & Stationery'
+    WHEN product_category = 'Electronis' THEN 'Electronics'
+    WHEN product_category = 'Fashon' THEN 'Fashion'
+    WHEN product_category IN ('Food', 'Food And Beverages') THEN 'Food & Beverages'
+    WHEN product_category = 'Home And Garden' THEN 'Home & Garden'
+    WHEN product_category IN ('Sports', 'Sports And Fitness') THEN 'Sports & Fitness'
+    ELSE product_category -- If it's already correct or doesn't match, keep it as is
+END
+WHERE product_category IN (
+    'Beauty', 'Books', 'Electronis', 'Fashon', 'Food', 
+    'Food And Beverages', 'Home And Garden', 'Sports', 'Sports And Fitness'
+);
+UPDATE sellers 
+SET product_category = 'Books & Stationery' 
+WHERE product_category = 'Books And Stationery';
+
+---Standardization verification
+SELECT 'Cities cleaned'     AS check_item,
+       COUNT(DISTINCT city) AS distinct_values
+FROM customers
+UNION ALL
+SELECT 'Product categories cleaned',
+       COUNT(DISTINCT category)
+FROM products
+UNION ALL
+SELECT 'Seller categories cleaned',
+       COUNT(DISTINCT product_category)
+FROM sellers;
